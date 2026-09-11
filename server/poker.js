@@ -379,16 +379,51 @@ export function pokerBotAction(game) {
   const p = game.players[game.acting];
   if (!p || !p.isBot) return null;
   const toCall = game.currentBet - p.bet;
-  const r = Math.random();
+  const strength = botHandStrength(p.hole, game.community || []);
+  const raiseTo = Math.min(p.chips + p.bet, game.currentBet + game.bb * (strength > 0.82 ? 4 : 2));
+
   if (toCall === 0) {
-    if (r < 0.18 && p.chips > game.bb) {
+    if (strength >= 0.7 && p.chips > game.bb) return pokerAction(game, p.id, "raise", raiseTo);
+    if (strength >= 0.52 && Math.random() < 0.28 && p.chips > game.bb) {
       return pokerAction(game, p.id, "raise", game.currentBet + game.bb * 2);
     }
     return pokerAction(game, p.id, "check");
   }
-  if (r < 0.22) return pokerAction(game, p.id, "fold");
-  if (r < 0.9 || p.chips <= toCall) return pokerAction(game, p.id, "call");
-  return pokerAction(game, p.id, "raise", game.currentBet + game.bb * 2);
+
+  const pot = Math.max(game.pot, 1);
+  const expensive = toCall > pot * 0.55 || toCall > game.bb * 4;
+  if (strength < 0.22 && expensive) return pokerAction(game, p.id, "fold");
+  if (strength < 0.32 && toCall > game.bb * 2 && game.phase === "preflop") {
+    return pokerAction(game, p.id, "fold");
+  }
+  if (strength < 0.38 && toCall > pot * 0.7) return pokerAction(game, p.id, "fold");
+  if (strength >= 0.78 && p.chips > toCall) return pokerAction(game, p.id, "raise", raiseTo);
+  if (strength >= 0.62 && toCall <= game.bb * 3 && p.chips > toCall + game.bb) {
+    if (Math.random() < 0.35) return pokerAction(game, p.id, "raise", game.currentBet + game.bb * 2);
+  }
+  return pokerAction(game, p.id, "call");
+}
+
+function botHandStrength(hole, community) {
+  if (!hole || hole.length < 2) return 0.2;
+  if (community.length >= 3) {
+    const h = bestHand([...hole, ...community]);
+    const cat = h?.cat || 0;
+    const kick = h?.kick?.[0] || 0;
+    return Math.min(0.97, 0.16 + cat * 0.095 + kick / 160);
+  }
+  const ranks = hole.map((c) => POKER_RANK[c.r]).sort((a, b) => b - a);
+  const [hi, lo] = ranks;
+  const pair = hi === lo;
+  const suited = hole[0].s === hole[1].s;
+  const connected = hi - lo === 1;
+  let s = hi / 22 + lo / 50;
+  if (pair) s = 0.46 + hi / 42;
+  if (suited) s += 0.05;
+  if (connected) s += 0.04;
+  if (hi >= 13 && lo >= 12) s += 0.14;
+  else if (hi >= 14 && lo >= 10) s += 0.08;
+  return Math.min(0.94, s);
 }
 
 export function publicPoker(game, viewerId) {

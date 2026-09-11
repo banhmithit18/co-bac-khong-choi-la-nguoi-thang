@@ -87,7 +87,16 @@ function groupByRank(hand) {
     g[c.r] = g[c.r] || [];
     g[c.r].push(c);
   }
+  for (const cards of Object.values(g)) cards.sort(byTl);
   return g;
+}
+
+const TL_FROM_VAL = Object.fromEntries(Object.entries(TL_RANK).map(([r, v]) => [v, r]));
+
+function rankSlice(g, r, n, high) {
+  const cards = g[r] || [];
+  if (cards.length < n) return [];
+  return high ? cards.slice(-n) : cards.slice(0, n);
 }
 
 function generatePlays(hand, current, must3s) {
@@ -104,24 +113,26 @@ function generatePlays(hand, current, must3s) {
 
   const g = groupByRank(hand);
   for (const cards of Object.values(g)) {
-    if (cards.length >= 2) add(cards.slice(0, 2));
-    if (cards.length >= 3) add(cards.slice(0, 3));
+    if (cards.length >= 2) {
+      add(cards.slice(0, 2));
+      add(cards.slice(-2));
+    }
+    if (cards.length >= 3) {
+      add(cards.slice(0, 3));
+      add(cards.slice(-3));
+    }
     if (cards.length >= 4) add(cards.slice(0, 4));
   }
 
-  const no2 = hand.filter((c) => c.r !== "2").sort(byTl);
-  const rankSeen = {};
-  const uniq = [];
-  for (const c of no2) {
-    if (rankSeen[c.r]) continue;
-    rankSeen[c.r] = true;
-    uniq.push(c);
-  }
-  uniq.sort((a, b) => TL_RANK[a.r] - TL_RANK[b.r]);
-  for (let len = 3; len <= uniq.length; len++) {
-    for (let i = 0; i + len <= uniq.length; i++) {
-      const slice = uniq.slice(i, i + len);
-      if (ranksSeq(slice)) add(slice);
+  const straightRanks = Object.keys(g)
+    .filter((r) => r !== "2")
+    .sort((a, b) => TL_RANK[a] - TL_RANK[b]);
+  for (let len = 3; len <= straightRanks.length; len++) {
+    for (let i = 0; i + len <= straightRanks.length; i++) {
+      const slice = straightRanks.slice(i, i + len);
+      if (!ranksSeq(slice.map((r) => ({ r, s: "s", id: r + "s" })))) continue;
+      add(slice.map((r) => rankSlice(g, r, 1, false)[0]).filter(Boolean));
+      add(slice.map((r) => rankSlice(g, r, 1, true)[0]).filter(Boolean));
     }
   }
 
@@ -136,8 +147,8 @@ function generatePlays(hand, current, must3s) {
         if (TL_RANK[slice[k]] !== TL_RANK[slice[k - 1]] + 1) seq = false;
       }
       if (!seq) continue;
-      const cards = slice.flatMap((r) => g[r].slice(0, 2));
-      add(cards);
+      add(slice.flatMap((r) => rankSlice(g, r, 2, false)));
+      add(slice.flatMap((r) => rankSlice(g, r, 2, true)));
     }
   }
 
@@ -348,13 +359,259 @@ export function tlPass(game, playerId) {
   return { ok: true };
 }
 
+function withoutCards(hand, cards) {
+  const set = new Set(cards.map((c) => c.id));
+  return hand.filter((c) => !set.has(c.id));
+}
+
+function isBomb(play) {
+  return play.type === "quad" || play.type === "seqpairs";
+}
+
+function heoCount(play) {
+  return play.cards.filter((c) => c.r === "2").length;
+}
+
+function currentIsHeo(current) {
+  if (!current?.cards?.length) return false;
+  return current.cards[0].r === "2" && (current.type === "single" || current.type === "pair");
+}
+
+function currentRank(current) {
+  if (!current?.cards?.length) return 0;
+  return Math.max(...current.cards.map((c) => TL_RANK[c.r] || 0));
+}
+
+function copyCounts(hand) {
+  const counts = {};
+  for (const c of hand) counts[c.r] = (counts[c.r] || 0) + 1;
+  return counts;
+}
+
+function extractSeqPairs(counts, want) {
+  let found = 0;
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (let start = 1; start + want - 1 <= 12; start++) {
+      let ok = true;
+      for (let k = 0; k < want; k++) {
+        const r = TL_FROM_VAL[start + k];
+        if ((counts[r] || 0) < 2) ok = false;
+      }
+      if (!ok) continue;
+      for (let k = 0; k < want; k++) counts[TL_FROM_VAL[start + k]] -= 2;
+      found += 1;
+      changed = true;
+      break;
+    }
+  }
+  return found;
+}
+
+function extractStraights(counts) {
+  let piles = 0;
+  while (true) {
+    let best = null;
+    for (let start = 1; start <= 12; start++) {
+      let len = 0;
+      let breaks = 0;
+      for (let v = start; v <= 12; v++) {
+        const n = counts[TL_FROM_VAL[v]] || 0;
+        if (n <= 0) break;
+        len += 1;
+        if (n >= 2) breaks += 1;
+      }
+      if (len >= 3 && (!best || len > best.len || (len === best.len && breaks < best.breaks))) {
+        best = { start, len, breaks };
+      }
+    }
+    if (!best) break;
+    for (let k = 0; k < best.len; k++) counts[TL_FROM_VAL[best.start + k]] -= 1;
+    piles += 1;
+  }
+  return piles;
+}
+
+function leftoverCounts(hand) {
+  const counts = copyCounts(hand);
+  const twos = counts["2"] || 0;
+  delete counts["2"];
+  for (const r of Object.keys(counts)) {
+    if (counts[r] >= 4) counts[r] -= 4;
+  }
+  extractSeqPairs(counts, 4);
+  extractSeqPairs(counts, 3);
+  for (const r of Object.keys(counts)) {
+    if (counts[r] >= 3) counts[r] -= 3;
+  }
+  extractStraights(counts);
+  return { counts, twos };
+}
+
+function remainingPiles(hand) {
+  const counts = copyCounts(hand);
+  const twos = counts["2"] || 0;
+  delete counts["2"];
+  let piles = twos > 0 ? 1 : 0;
+  for (const r of Object.keys(counts)) {
+    if (counts[r] >= 4) {
+      piles += 1;
+      counts[r] -= 4;
+    }
+  }
+  piles += extractSeqPairs(counts, 4);
+  piles += extractSeqPairs(counts, 3);
+  for (const r of Object.keys(counts)) {
+    if (counts[r] >= 3) {
+      piles += 1;
+      counts[r] -= 3;
+    }
+  }
+  piles += extractStraights(counts);
+  for (const r of Object.keys(counts)) {
+    if (counts[r] >= 2) {
+      piles += 1;
+      counts[r] -= 2;
+    }
+    if (counts[r] > 0) piles += counts[r];
+  }
+  return piles;
+}
+
+function leftoverSingleCount(hand) {
+  const { counts } = leftoverCounts(hand);
+  return Object.values(counts).filter((n) => n === 1).length;
+}
+
+function isLeftoverSingle(hand, card) {
+  if (!card || card.r === "2") return false;
+  const { counts } = leftoverCounts(hand);
+  return (counts[card.r] || 0) === 1;
+}
+
+function isLeftoverPair(hand, play) {
+  if (play.type !== "pair" || play.cards[0].r === "2") return false;
+  const { counts } = leftoverCounts(hand);
+  return (counts[play.cards[0].r] || 0) >= 2;
+}
+
+function smallestThreat(game, me) {
+  let n = 13;
+  for (const o of game.players) {
+    if (o.id === me.id || o.done) continue;
+    n = Math.min(n, o.hand.length);
+  }
+  return n;
+}
+
+function lastByLeft(game) {
+  const p = game.players.find((x) => x.id === game.lastBy);
+  if (!p || p.done) return 13;
+  return p.hand.length;
+}
+
+function cheapCurrent(current) {
+  const r = currentRank(current);
+  return r > 0 && r <= 8;
+}
+
+function scorePlay(hand, play, current, threat, lastLeft) {
+  const rest = withoutCards(hand, play.cards);
+  if (!rest.length) return -100000 + play.key * 0.01;
+
+  const orphans = leftoverSingleCount(hand);
+  const leftoverSingle = play.type === "single" && isLeftoverSingle(hand, play.cards[0]);
+  let s = remainingPiles(rest) * 36;
+  s += play.key * 0.08;
+
+  if (!current) {
+    if (threat <= 1) {
+      if (play.type === "single") s += 160;
+      else s -= play.cards.length * 8;
+      if (play.type === "pair" || play.type === "triple" || play.type === "straight") s -= 40;
+    } else {
+      if (leftoverSingle) s -= 95 - TL_RANK[play.cards[0].r] * 4;
+      else if (play.type === "single" && play.cards[0].r !== "2") s += 55;
+      if (play.type === "pair") s += orphans > 0 ? 70 : -8;
+      if (play.type === "triple") s += orphans > 0 ? 25 : -14;
+      if (play.type === "straight") s -= orphans ? play.n : play.n * 5;
+    }
+    if (isBomb(play) && rest.length > 1) s += 420;
+    if (heoCount(play) && rest.length > 0) s += 300 + play.key * 0.15;
+  } else {
+    s += play.key * 0.22;
+    if (leftoverSingle) s -= 75;
+    if (play.type === current.type && play.n === current.n && !isBomb(play)) {
+      if (cheapCurrent(current)) s -= 45;
+      if (orphans > 0 && leftoverSingle) s -= 30;
+    }
+    if (lastLeft <= 1) {
+      s -= 180;
+      if (play.type === "single") s -= play.key * 0.9;
+    } else if (lastLeft === 2 || threat <= 2) {
+      s -= 70;
+      if (current.type === "single" && leftoverSingle) s -= 35;
+    }
+    if (isBomb(play) && !currentIsHeo(current)) {
+      if (threat > 2 && lastLeft > 2) s += 620;
+      else if (threat === 2) s += 140;
+    }
+    if (isBomb(play) && currentIsHeo(current)) s -= 50;
+    if (heoCount(play) && !currentIsHeo(current)) {
+      const r = currentRank(current);
+      if (lastLeft <= 1) s -= 20;
+      else if (threat > 2 && r < 11) s += 340;
+      else if (threat > 1 && r < 9) s += 180;
+    }
+  }
+  return s;
+}
+
+function passLimit(current, threat, lastLeft, bestPlay, hand) {
+  if (lastLeft <= 1) return 5000;
+  if (lastLeft === 2 && current.type === "single") return 700;
+  if (threat <= 1) return 1200;
+  if (threat === 2) return 480;
+  if (currentIsHeo(current) && threat > 2) return 95;
+  if (
+    cheapCurrent(current) &&
+    bestPlay &&
+    bestPlay.type === current.type &&
+    !isBomb(bestPlay) &&
+    (bestPlay.type !== "single" || isLeftoverSingle(hand, bestPlay.cards[0]) || isLeftoverPair(hand, bestPlay))
+  ) {
+    return 420;
+  }
+  return 200;
+}
+
+function pickBotPlay(p, plays, game) {
+  if (!plays.length) return null;
+  const current = game.current;
+  const threat = smallestThreat(game, p);
+  const lastLeft = current ? lastByLeft(game) : 13;
+  let best = null;
+  for (const play of plays) {
+    const score = scorePlay(p.hand, play, current, threat, lastLeft);
+    if (!best || score < best.score || (score === best.score && play.key < best.play.key)) {
+      best = { play, score };
+    }
+  }
+  if (!best) return null;
+  if (current && lastLeft <= 1) return best.play;
+  if (current && best.score > passLimit(current, threat, lastLeft, best.play, p.hand)) return null;
+  return best.play;
+}
+
 export function tlBotAction(game) {
   if (game.phase !== "play") return null;
   const p = game.players[game.turn];
   if (!p || !p.isBot || p.done) return null;
   if (!p.hand.length) return tlPass(game, p.id);
   const plays = generatePlays(p.hand, game.current, game.must3s && p.hand.some((c) => c.id === "3s"));
-  if (!plays.length) {
+  const choice = pickBotPlay(p, plays, game);
+  if (!choice) {
     if (!game.current) {
       const lowest = p.hand.slice().sort(byTl)[0];
       if (!lowest) return null;
@@ -362,11 +619,10 @@ export function tlBotAction(game) {
     }
     return tlPass(game, p.id);
   }
-  plays.sort((a, b) => a.cards.length - b.cards.length || a.key - b.key);
   return tlPlay(
     game,
     p.id,
-    plays[0].cards.map((c) => c.id)
+    choice.cards.map((c) => c.id)
   );
 }
 
