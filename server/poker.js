@@ -1,4 +1,4 @@
-import { POKER_RANK, combinations, makeDeck } from "./cards.js";
+import { POKER_RANK, combinations, addHistory } from "./cards.js";
 import { luckyIndex, pokerDeal } from "./luck.js";
 
 const HAND_NAMES = [
@@ -125,45 +125,41 @@ function awardPot(game) {
     live[0].chips += game.pot;
     game.winners = [{ id: live[0].id, name: live[0].name, amount: game.pot, hand: null }];
     game.pot = 0;
-    return;
+  } else {
+    const scored = live.map((p) => ({
+      p,
+      hand: bestHand([...p.hole, ...game.community]),
+    }));
+    scored.sort((a, b) => cmpHand(b.hand, a.hand));
+    const top = scored.filter((s) => cmpHand(s.hand, scored[0].hand) === 0);
+    const share = Math.floor(game.pot / top.length);
+    let left = game.pot;
+    game.winners = [];
+    for (const s of top) {
+      const amt = s === top[top.length - 1] ? left : share;
+      s.p.chips += amt;
+      left -= amt;
+      game.winners.push({
+        id: s.p.id,
+        name: s.p.name,
+        amount: amt,
+        hand: s.hand.name,
+      });
+    }
+    game.pot = 0;
   }
-  const scored = live.map((p) => ({
-    p,
-    hand: bestHand([...p.hole, ...game.community]),
-  }));
-  scored.sort((a, b) => cmpHand(b.hand, a.hand));
-  const top = scored.filter((s) => cmpHand(s.hand, scored[0].hand) === 0);
-  const share = Math.floor(game.pot / top.length);
-  let left = game.pot;
-  game.winners = [];
-  for (const s of top) {
-    const amt = s === top[top.length - 1] ? left : share;
-    s.p.chips += amt;
-    left -= amt;
-    game.winners.push({
-      id: s.p.id,
-      name: s.p.name,
-      amount: amt,
-      hand: s.hand.name,
-    });
-  }
-  game.pot = 0;
-}
-
-function ensureLuckyWins(holes, community, luckyIdx) {
-  const lucky = bestHand([...holes[luckyIdx], ...community]);
-  for (let i = 0; i < holes.length; i++) {
-    if (i === luckyIdx || holes[i].length < 2) continue;
-    const opp = bestHand([...holes[i], ...community]);
-    if (cmpHand(opp, lucky) < 0) continue;
-    const used = new Set(
-      [...holes.flat(), ...community].map((c) => c.id)
-    );
-    const junk = makeDeck()
-      .filter((c) => !used.has(c.id))
-      .sort((a, b) => POKER_RANK[a.r] - POKER_RANK[b.r]);
-    if (junk.length >= 2) holes[i] = [junk[0], junk[1]];
-  }
+  addHistory(game, `Poker · ván ${game.handNo || game.roundNo}`, [
+    ...game.winners.map((w) => ({
+      text: `${w.name} thắng ${w.amount.toLocaleString("vi-VN")} ₫${w.hand ? ` · ${w.hand}` : ""}`,
+      win: true,
+    })),
+    ...game.players
+      .filter((p) => !game.winners.some((w) => w.id === p.id))
+      .map((p) => ({
+        text: `${p.name}${p.folded ? " (úp)" : ""}`,
+        lose: !p.folded,
+      })),
+  ]);
 }
 
 function postBlind(game, idx, amount) {
@@ -176,7 +172,7 @@ function postBlind(game, idx, amount) {
   if (p.chips === 0) p.allIn = true;
 }
 
-export function createPoker(players) {
+export function createPoker(players, bookmakerId) {
   const stack = Math.max(...players.map((p) => p.chips || 1_000_000));
   const blinds = {
     sb: Math.max(1000, Math.round(stack / 200 / 1000) * 1000),
@@ -187,6 +183,7 @@ export function createPoker(players) {
     id: p.id,
     name: p.name,
     isBot: !!p.isBot,
+    isCai: p.id === bookmakerId,
     chips: p.chips ?? 1_000_000,
     hole: [],
     bet: 0,
@@ -195,11 +192,13 @@ export function createPoker(players) {
     allIn: false,
     acted: false,
   }));
+  const caiIdx = Math.max(0, seats.findIndex((p) => p.isCai));
   return {
     kind: "poker",
+    bookmakerId: bookmakerId || seats[0]?.id,
     phase: "idle",
     players: seats,
-    button: 0,
+    button: (caiIdx - 1 + seats.length) % seats.length,
     sb: blinds.sb,
     bb: blinds.bb,
     community: [],
@@ -210,6 +209,8 @@ export function createPoker(players) {
     winners: [],
     handNo: 0,
     revealed: false,
+    history: [],
+    roundNo: 0,
   };
 }
 
@@ -227,7 +228,6 @@ export function startPokerHand(game) {
 
   const luckyIdx = luckyIndex(game.players);
   const { holes, community } = pokerDeal(game.players.length, luckyIdx);
-  if (luckyIdx >= 0) ensureLuckyWins(holes, community, luckyIdx);
   game.communityAll = community;
   game.community = [];
   game.pot = 0;
@@ -405,10 +405,13 @@ export function publicPoker(game, viewerId) {
     button: game.players[game.button]?.id,
     winners: game.winners,
     handNo: game.handNo,
+    bookmakerId: game.bookmakerId,
+    history: game.history || [],
     players: game.players.map((p) => ({
       id: p.id,
       name: p.name,
       isBot: p.isBot,
+      isCai: p.isCai,
       chips: p.chips,
       bet: p.bet,
       folded: p.folded,

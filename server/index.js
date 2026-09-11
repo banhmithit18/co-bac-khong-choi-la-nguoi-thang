@@ -4,8 +4,8 @@ import { Server } from "socket.io";
 import path from "path";
 import { fileURLToPath } from "url";
 import { createPoker, startPokerHand, pokerAction, pokerBotAction, publicPoker } from "./poker.js";
-import { createBlackjack, bjBet, bjAction, bjNext, publicBlackjack } from "./blackjack.js";
-import { createTienlen, tlPlay, tlPass, tlBotAction, publicTienlen } from "./tienlen.js";
+import { createBlackjack, bjBet, bjAction, bjNext, bjBotTick, publicBlackjack } from "./blackjack.js";
+import { createTienlen, tlPlay, tlPass, tlBotAction, nextTienlen, publicTienlen } from "./tienlen.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -31,8 +31,8 @@ function parseMoney(raw, fallback = DEFAULT_CHIPS) {
   return Math.min(MAX_CHIPS, Math.max(MIN_CHIPS, Math.round(n)));
 }
 
-const CAP = { poker: 6, blackjack: 3, tienlen: 4 };
-const FILL = { poker: 4, blackjack: 1, tienlen: 4 };
+const CAP = { poker: 6, blackjack: 5, tienlen: 4 };
+const FILL = { poker: 4, blackjack: 4, tienlen: 4 };
 
 function code() {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -52,8 +52,10 @@ function publicRoom(room) {
       id: p.id,
       name: p.name,
       isBot: p.isBot,
+      isCai: p.id === room.host,
       chips: p.chips,
     })),
+    bookmakerId: room.host,
   };
 }
 
@@ -131,6 +133,25 @@ function runBots(room) {
     emitRoom(room);
     const next = g.players[g.acting];
     if (next?.isBot) queueBots(room);
+    return;
+  }
+  if (room.game === "blackjack") {
+    const g = room.state;
+    if (g.phase === "result") {
+      emitRoom(room);
+      return;
+    }
+    const did = bjBotTick(g);
+    emitRoom(room);
+    if (!did) return;
+    if (g.phase === "result") return;
+    if (g.phase === "betting") {
+      const waitingBot = g.players.some((p) => !p.isCai && p.isBot && p.bet <= 0 && p.chips >= g.minBet);
+      if (waitingBot) queueBots(room);
+      return;
+    }
+    const actor = g.acting >= 0 ? g.players[g.acting] : null;
+    if (actor?.isBot) queueBots(room);
     return;
   }
   if (room.game === "tienlen") {
@@ -263,22 +284,29 @@ io.on("connection", (socket) => {
     const res = bjBet(room.state, socket.id, amount);
     if (!res.ok) return socket.emit("errorMsg", res.error);
     emitRoom(room);
+    queueBots(room);
   });
 
-  socket.on("bj", ({ action }) => {
+  socket.on("bj", ({ action, targetId }) => {
     const room = rooms.get(socket.data.room);
     if (!room?.state || room.game !== "blackjack") return;
-    const res = bjAction(room.state, socket.id, action);
+    const res = bjAction(room.state, socket.id, action, targetId);
     if (!res.ok) return socket.emit("errorMsg", res.error);
     emitRoom(room);
+    queueBots(room);
   });
 
   socket.on("bjNext", () => {
     const room = rooms.get(socket.data.room);
     if (!room?.state || room.game !== "blackjack") return;
     if (room.state.phase !== "result") return;
+    for (const p of room.players) {
+      const g = room.state.players.find((x) => x.id === p.id);
+      if (g) p.chips = g.chips;
+    }
     bjNext(room.state);
     emitRoom(room);
+    queueBots(room);
   });
 
   socket.on("tlPlay", ({ cards }) => {
@@ -301,6 +329,15 @@ io.on("connection", (socket) => {
     if (actor?.isBot) queueBots(room);
   });
 
+  socket.on("tlNext", () => {
+    const room = rooms.get(socket.data.room);
+    if (!room?.state || room.game !== "tienlen") return;
+    if (room.state.phase !== "over") return;
+    room.state = nextTienlen(room.state);
+    emitRoom(room);
+    queueBots(room);
+  });
+
   socket.on("leave", () => {
     leaveSocket(socket);
     socket.emit("left");
@@ -312,14 +349,12 @@ io.on("connection", (socket) => {
 function startRoom(room) {
   room.started = true;
   if (room.game === "poker") {
-    room.state = createPoker(room.players);
+    room.state = createPoker(room.players, room.host);
     startPokerHand(room.state);
   } else if (room.game === "blackjack") {
-    room.state = createBlackjack(room.players.filter((p) => !p.isBot).length
-      ? room.players.filter((p) => !p.isBot)
-      : room.players);
+    room.state = createBlackjack(room.players, room.host);
   } else {
-    room.state = createTienlen(room.players);
+    room.state = createTienlen(room.players, room.host);
   }
   emitRoom(room);
   queueBots(room);

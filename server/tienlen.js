@@ -1,4 +1,4 @@
-import { combinations, tlValue, TL_RANK } from "./cards.js";
+import { addHistory, combinations, tlValue, TL_RANK } from "./cards.js";
 import { luckyIndex, tienlenDeal } from "./luck.js";
 
 function byTl(a, b) {
@@ -166,32 +166,43 @@ function takeCards(hand, ids) {
   return { taken, rest };
 }
 
-export function createTienlen(players) {
+export function createTienlen(players, bookmakerId, leadId) {
   const luckyIdx = luckyIndex(players);
   const hands = tienlenDeal(players.length, luckyIdx);
   const seats = players.map((p, i) => ({
     id: p.id,
     name: p.name,
     isBot: !!p.isBot,
+    isCai: p.id === bookmakerId,
     hand: hands[i].sort(byTl),
     passed: false,
     done: false,
   }));
 
   let start = seats.findIndex((p) => p.hand.some((c) => c.id === "3s"));
+  if (leadId) {
+    const idx = seats.findIndex((p) => p.id === leadId);
+    if (idx >= 0) start = idx;
+  }
+  if (start < 0) start = Math.max(0, seats.findIndex((p) => p.isCai));
   if (start < 0) start = 0;
 
   return {
     kind: "tienlen",
+    bookmakerId: bookmakerId || seats[0]?.id,
     phase: "play",
     players: seats,
     turn: start,
     current: null,
     lastBy: null,
-    must3s: true,
+    must3s: !leadId,
     ranking: [],
-    message: `${seats[start].name} ra bài trước (có 3♠).`,
+    message: leadId
+      ? `${seats[start].name} (nhất ván trước) ra bài.`
+      : `${seats[start].name} ra bài trước (có 3♠).`,
     log: [],
+    history: [],
+    roundNo: 0,
   };
 }
 
@@ -201,6 +212,15 @@ function nextAlive(game, from) {
     const idx = (from + i) % n;
     const p = game.players[idx];
     if (!p.done && !p.passed) return idx;
+  }
+  return -1;
+}
+
+function nextNotDone(game, from) {
+  const n = game.players.length;
+  for (let i = 1; i <= n; i++) {
+    const idx = (from + i) % n;
+    if (!game.players[idx].done) return idx;
   }
   return -1;
 }
@@ -215,6 +235,38 @@ function clearTrick(game, winnerIdx) {
   for (const p of game.players) p.passed = p.done;
   game.turn = winnerIdx;
   game.message = `${game.players[winnerIdx].name} được quyền ra bài.`;
+}
+
+function giveLead(game, preferIdx) {
+  let lead = preferIdx;
+  if (lead == null || lead < 0 || game.players[lead]?.done) {
+    lead = nextNotDone(game, preferIdx >= 0 ? preferIdx : 0);
+  }
+  const left = aliveNotDone(game);
+  if (left.length <= 1) {
+    if (left[0] && !game.ranking.some((r) => r.id === left[0].id)) {
+      game.ranking.push({ id: left[0].id, name: left[0].name });
+    }
+    finishGame(game);
+    return;
+  }
+  if (lead < 0) {
+    finishGame(game);
+    return;
+  }
+  clearTrick(game, lead);
+}
+
+function finishGame(game) {
+  game.phase = "over";
+  game.turn = -1;
+  const order = game.ranking.map((r, i) => `${i + 1}. ${r.name}`).join(" · ");
+  game.message = `Hết ván. ${order}`;
+  addHistory(game, "Tiến lên · kết ván", game.ranking.map((r, i) => ({
+    text: `Hạng ${i + 1}: ${r.name}`,
+    win: i === 0,
+    lose: i === game.ranking.length - 1,
+  })));
 }
 
 export function tlPlay(game, playerId, cardIds) {
@@ -242,12 +294,17 @@ export function tlPlay(game, playerId, cardIds) {
     p.done = true;
     p.passed = true;
     game.ranking.push({ id: p.id, name: p.name });
-    game.message = `${p.name} đã hết bài.`;
+    const place = game.ranking.length;
+    game.message = `${p.name} về hạng ${place}.`;
+    addHistory(game, `Tiến lên · hạng ${place}`, [
+      { text: `${p.name} hết bài · hạng ${place}`, win: place === 1 },
+    ]);
     const left = aliveNotDone(game);
     if (left.length <= 1) {
-      if (left[0]) game.ranking.push({ id: left[0].id, name: left[0].name });
-      game.phase = "over";
-      game.turn = -1;
+      if (left[0] && !game.ranking.some((r) => r.id === left[0].id)) {
+        game.ranking.push({ id: left[0].id, name: left[0].name });
+      }
+      finishGame(game);
       return { ok: true };
     }
   }
@@ -255,11 +312,12 @@ export function tlPlay(game, playerId, cardIds) {
   for (const o of game.players) {
     if (o !== p && !o.done) o.passed = false;
   }
+  if (p.done) p.passed = true;
 
   const nxt = nextAlive(game, idx);
   if (nxt < 0 || nxt === idx) {
     const winIdx = game.players.findIndex((x) => x.id === game.lastBy);
-    clearTrick(game, winIdx);
+    giveLead(game, winIdx);
   } else {
     game.turn = nxt;
     game.message = `${game.players[nxt].name} tới lượt.`;
@@ -282,11 +340,7 @@ export function tlPass(game, playerId) {
   const nxt = nextAlive(game, idx);
   if (nxt < 0 || nxt === idx || game.players[nxt].id === game.lastBy) {
     const winIdx = game.players.findIndex((x) => x.id === game.lastBy);
-    if (winIdx >= 0 && !game.players[winIdx].done) clearTrick(game, winIdx);
-    else {
-      const lead = nextAlive(game, idx);
-      if (lead >= 0) clearTrick(game, lead);
-    }
+    giveLead(game, winIdx);
   } else {
     game.turn = nxt;
     game.message = `${game.players[nxt].name} tới lượt.`;
@@ -295,12 +349,15 @@ export function tlPass(game, playerId) {
 }
 
 export function tlBotAction(game) {
+  if (game.phase !== "play") return null;
   const p = game.players[game.turn];
-  if (!p || !p.isBot) return null;
+  if (!p || !p.isBot || p.done) return null;
+  if (!p.hand.length) return tlPass(game, p.id);
   const plays = generatePlays(p.hand, game.current, game.must3s && p.hand.some((c) => c.id === "3s"));
   if (!plays.length) {
     if (!game.current) {
       const lowest = p.hand.slice().sort(byTl)[0];
+      if (!lowest) return null;
       return tlPlay(game, p.id, [lowest.id]);
     }
     return tlPass(game, p.id);
@@ -313,6 +370,19 @@ export function tlBotAction(game) {
   );
 }
 
+export function nextTienlen(game) {
+  const leadId = game.ranking[0]?.id;
+  const seats = game.players.map((p) => ({
+    id: p.id,
+    name: p.name,
+    isBot: p.isBot,
+  }));
+  const next = createTienlen(seats, game.bookmakerId, leadId);
+  next.history = game.history || [];
+  next.roundNo = game.roundNo || 0;
+  return next;
+}
+
 export function publicTienlen(game, viewerId) {
   return {
     kind: "tienlen",
@@ -323,11 +393,14 @@ export function publicTienlen(game, viewerId) {
     must3s: game.must3s,
     ranking: game.ranking,
     log: game.log,
+    bookmakerId: game.bookmakerId,
+    history: game.history || [],
     turn: game.turn >= 0 ? game.players[game.turn].id : null,
     players: game.players.map((p) => ({
       id: p.id,
       name: p.name,
       isBot: p.isBot,
+      isCai: p.isCai,
       count: p.hand.length,
       passed: p.passed,
       done: p.done,

@@ -148,3 +148,10 @@ export function combinations(arr, k) {
   rec(0, []);
   return out;
 }
+
+export function addHistory(game, title, lines) {
+  game.history = game.history || [];
+  game.roundNo = (game.roundNo || 0) + 1;
+  game.history.unshift({ round: game.roundNo, title, lines });
+  if (game.history.length > 40) game.history.pop();
+}

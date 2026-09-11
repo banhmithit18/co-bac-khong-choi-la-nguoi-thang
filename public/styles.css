@@ -518,6 +518,54 @@ h2 {
   text-transform: uppercase;
 }
 
+.tabs {
+  display: flex;
+  gap: 8px;
+  margin: 0 0 16px;
+}
+
+.seat.cai {
+  border-color: var(--gold);
+  color: var(--gold-2);
+}
+
+.history-list {
+  max-height: 70vh;
+  overflow: auto;
+}
+
+.hist-item {
+  border-bottom: 1px solid var(--line);
+  padding: 14px 0;
+}
+
+.hist-item:last-child {
+  border-bottom: 0;
+}
+
+.hist-title {
+  font-family: "Cormorant Garamond", Georgia, serif;
+  font-size: 22px;
+  color: var(--gold-2);
+  margin-bottom: 8px;
+}
+
+.hist-line {
+  color: var(--muted);
+  font-size: 14px;
+  padding: 3px 0;
+}
+
+.hist-line.win {
+  color: #d5e8c8;
+}
+
+.xet-btn {
+  margin-top: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
 @media (max-width: 860px) {
   .games {
     grid-template-columns: 1fr;

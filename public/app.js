@@ -10,6 +10,7 @@ const state = {
   selected: [],
   toast: "",
   bet: 50000,
+  tab: "table",
 };
 
 const PRESETS = [100000, 500000, 1000000, 5000000, 10000000];
@@ -62,6 +63,7 @@ socket.on("state", (game) => {
   }
   const you = game?.players?.find((p) => p.you);
   if (you?.chips != null) state.chips = you.chips;
+  else if (game?.dealer?.chips != null && game.youAreCai) state.chips = game.dealer.chips;
   render();
 });
 
@@ -69,6 +71,7 @@ socket.on("left", () => {
   state.room = null;
   state.game = null;
   state.selected = [];
+  state.tab = "table";
   state.screen = "home";
   render();
 });
@@ -179,14 +182,14 @@ function room() {
   return `<div class="wrap">
     ${topBar(`<button class="ghost" id="leave">Rời bàn</button>`)}
     <h1>${label(r.game)}</h1>
-    <p class="muted">Gửi mã <span class="code">${r.code}</span>. Chủ phòng bắt đầu ván.</p>
+    <p class="muted">Gửi mã <span class="code">${r.code}</span>. Người tạo phòng là <b>nhà cái</b> và bắt đầu ván.</p>
     <div class="panel">
       <h2>Ghế ngồi</h2>
       <div class="seats">
         ${r.players
           .map(
             (p) =>
-              `<div class="seat ${p.name === state.name && !p.isBot ? "you" : ""}">${escapeHtml(p.name)} · ${vnd(p.chips)}</div>`
+              `<div class="seat ${p.name === state.name && !p.isBot ? "you" : ""} ${p.isCai ? "cai" : ""}">${escapeHtml(p.name)}${p.isCai ? " · nhà cái" : ""} · ${vnd(p.chips)}</div>`
           )
           .join("")}
       </div>
@@ -207,9 +210,45 @@ function play() {
   if (!g) {
     return `<div class="wrap">${topBar(`<button class="ghost" id="leave">Rời bàn</button>`)}<p class="muted">Đang chia bài…</p></div>`;
   }
+  if (state.tab === "history") return historyView(g);
   if (g.kind === "poker") return pokerView(g);
   if (g.kind === "blackjack") return bjView(g);
   return tlView(g);
+}
+
+function tabs() {
+  return `<div class="tabs">
+    <button id="tabTable" class="${state.tab !== "history" ? "primary" : ""}">Bàn</button>
+    <button id="tabHistory" class="${state.tab === "history" ? "primary" : ""}">Lịch sử</button>
+  </div>`;
+}
+
+function historyView(g) {
+  const items = g.history || [];
+  return `<div class="wrap">
+    ${topBar(`<button class="ghost" id="leave">Rời bàn</button>`)}
+    ${tabs()}
+    <div class="panel history-list">
+      <h2>Lịch sử ván</h2>
+      ${
+        items.length
+          ? items
+              .map(
+                (h) => `<div class="hist-item">
+            <div class="hist-title">Ván ${h.round} · ${escapeHtml(h.title)}</div>
+            ${(h.lines || [])
+              .map(
+                (l) =>
+                  `<div class="hist-line ${l.win ? "win" : l.lose ? "lose" : ""}">${escapeHtml(l.text)}</div>`
+              )
+              .join("")}
+          </div>`
+              )
+              .join("")
+          : `<p class="muted">Chưa có ván nào xong.</p>`
+      }
+    </div>
+  </div>`;
 }
 
 function label(game) {
@@ -226,6 +265,7 @@ function phaseName(phase) {
     betting: "Đặt cược",
     playing: "Rút bài",
     dealer: "Nhà cái",
+    xet: "Xét bài",
     result: "Kết quả",
   }[phase] || phase;
 }
@@ -237,6 +277,7 @@ function pokerView(g) {
   const toCall = you ? Math.max(0, g.currentBet - you.bet) : 0;
   return `<div class="wrap">
     ${topBar(`<button class="ghost" id="leave">Rời bàn</button>`)}
+    ${tabs()}
     <div class="status">${g.phase === "showdown" ? resultLine(g) : `${phaseName(g.phase)} · hũ ${vnd(g.pot)}`}</div>
     <div class="felt"><div class="felt-in">
       <div class="opponents">${others.map((p) => seatBlock(p, g.acting)).join("")}</div>
@@ -247,7 +288,7 @@ function pokerView(g) {
       ${
         you
           ? `<div class="you-row ${yourTurn ? "turn" : ""}">
-              <div class="name muted">${escapeHtml(you.name)} · ${vnd(you.chips)}${you.bet ? ` · đã tố ${vnd(you.bet)}` : ""}</div>
+              <div class="name muted">${p.isCai ? "Nhà cái · " : ""}${escapeHtml(you.name)} · ${vnd(you.chips)}${you.bet ? ` · đã tố ${vnd(you.bet)}` : ""}</div>
               <div class="hand">${you.hole.map((c) => cardEl(c)).join("")}</div>
             </div>`
           : ""
@@ -280,7 +321,7 @@ function resultLine(g) {
 
 function seatBlock(p, acting) {
   return `<div class="opp ${p.folded ? "folded" : ""} ${acting === p.id ? "turn" : ""}">
-    <div class="name">${escapeHtml(p.name)}${p.chips != null ? ` · ${vnd(p.chips)}` : ""}</div>
+    <div class="name">${p.isCai ? "Nhà cái · " : ""}${escapeHtml(p.name)}${p.chips != null ? ` · ${vnd(p.chips)}` : ""}</div>
     <div class="hand">${(p.hole || []).map((c) => cardEl(c, "tiny")).join("") || `<span class="muted">${p.count ?? ""} lá</span>`}</div>
     ${p.bet ? `<div class="muted">${vnd(p.bet)}</div>` : ""}
     ${p.passed ? `<div class="muted">bỏ</div>` : ""}
@@ -290,32 +331,40 @@ function seatBlock(p, acting) {
 
 function bjView(g) {
   const you = g.players.find((p) => p.you);
+  const youAreCai = g.youAreCai || you?.isCai;
+  const cons = g.players.filter((p) => !p.isCai);
   const yourTurn = g.acting && you && g.acting === you.id;
   const minBet = g.minBet || 10000;
   const betVal = Math.min(Math.max(state.bet, minBet), you?.chips || minBet);
   return `<div class="wrap">
     ${topBar(`<button class="ghost" id="leave">Rời bàn</button>`)}
+    ${tabs()}
     <div class="status">${escapeHtml(g.message || phaseName(g.phase))}</div>
     <div class="felt"><div class="felt-in">
       <div class="center">
-        <div class="pot">Nhà cái${g.dealer.label && g.phase !== "playing" ? ` · ${g.dealer.label}` : ""}</div>
+        <div class="pot">Nhà cái · ${escapeHtml(g.dealer.name || "")}${g.dealer.chips != null ? ` · ${vnd(g.dealer.chips)}` : ""}${g.dealer.label ? ` · ${g.dealer.label}` : ""}</div>
         <div class="hand">${g.dealer.cards.map((c) => cardEl(c)).join("")}</div>
       </div>
       <div class="opponents">
-        ${g.players
+        ${cons
           .map((p) => {
-            const tag = p.result || p.label || (p.total ? `${p.total} điểm` : "");
-            return `<div class="opp ${g.acting === p.id ? "turn" : ""}">
+            const tag = p.result || p.label || "";
+            return `<div class="opp ${g.acting === p.id ? "turn" : ""} ${p.settled ? "folded" : ""}">
               <div class="name">${escapeHtml(p.name)} · ${vnd(p.chips)}${p.bet ? ` · cược ${vnd(p.bet)}` : ""}</div>
-              <div class="hand">${p.cards.map((c) => cardEl(c, "tiny")).join("")}</div>
+              <div class="hand">${(p.cards.length ? p.cards : []).map((c) => cardEl(c, "tiny")).join("")}</div>
               <div class="muted">${tag}</div>
+              ${
+                youAreCai && g.phase === "xet" && !p.settled && p.bet && g.canXet
+                  ? `<button class="xet-btn" data-xet="${p.id}">Xét cửa này</button>`
+                  : ""
+              }
             </div>`;
           })
           .join("")}
       </div>
     </div></div>
     ${
-      g.phase === "betting" && you
+      g.phase === "betting" && you && !youAreCai
         ? `<div class="panel">
             <h2>Đặt cược</h2>
             <p class="muted">Tối thiểu ${vnd(minBet)}. Xì bàng ăn 3:1 · xì dách / ngũ linh ăn 2:1.</p>
@@ -334,11 +383,25 @@ function bjView(g) {
         : ""
     }
     ${
-      yourTurn
+      g.phase === "betting" && youAreCai
+        ? `<p class="muted" style="text-align:center">Bạn là nhà cái. Đợi nhà con đặt cược. Bài các cửa sẽ úp cho đến khi bạn xét.</p>`
+        : ""
+    }
+    ${
+      g.phase === "playing" && yourTurn && !youAreCai
         ? `<div class="actions">
             <button data-bj="hit">Rút</button>
             <button data-bj="stand" ${you.canStand ? "" : "disabled"}>Dằn</button>
           </div>`
+        : ""
+    }
+    ${
+      g.phase === "xet" && youAreCai
+        ? `<div class="actions">
+            <button data-bj="hit" ${g.canHitCai ? "" : "disabled"}>Rút thêm</button>
+            <button class="primary" id="xetAll" ${g.canXet ? "" : "disabled"}>Xét hết</button>
+          </div>
+          <p class="muted" style="text-align:center">Xét một cửa: hai bên lật bài và tính tiền ngay. Sau đó có thể rút thêm hoặc xét các cửa còn lại.</p>`
         : ""
     }
     ${g.phase === "result" ? `<div class="actions"><button class="primary" id="bjNext">Ván sau</button></div>` : ""}
@@ -355,6 +418,7 @@ function tlView(g) {
   const yourTurn = g.turn && you && g.turn === you.id;
   return `<div class="wrap">
     ${topBar(`<button class="ghost" id="leave">Rời bàn</button>`)}
+    ${tabs()}
     <div class="status">${escapeHtml(g.message || "")}${g.ranking?.length ? ` · ${g.ranking.map((r, i) => `${i + 1}. ${escapeHtml(r.name)}`).join("  ")}` : ""}</div>
     <div class="felt"><div class="felt-in">
       <div class="opponents">${others.map((p) => seatBlock({ ...p, hole: Array.from({ length: p.count }, () => ({ id: "back", r: "?", s: "?" })) }, g.turn)).join("")}</div>
@@ -365,7 +429,7 @@ function tlView(g) {
       ${
         you
           ? `<div class="you-row ${yourTurn ? "turn" : ""}">
-              <div class="name muted">${escapeHtml(you.name)} · ${you.count} lá</div>
+              <div class="name muted">${you.isCai ? "Nhà cái · " : ""}${escapeHtml(you.name)} · ${you.count} lá</div>
               <div class="hand tl-hand">${you.hand.map((c) => cardEl(c, state.selected.includes(c.id) ? "selected" : "")).join("")}</div>
             </div>`
           : ""
@@ -379,7 +443,11 @@ function tlView(g) {
           </div>`
         : ""
     }
-    ${g.phase === "over" ? `<div class="actions"><button class="ghost" id="leave">Rời bàn</button></div>` : ""}
+    ${
+      g.phase === "over"
+        ? `<div class="actions"><button class="primary" id="tlNext">Ván sau</button><button class="ghost" id="leave">Rời bàn</button></div>`
+        : ""
+    }
   </div>`;
 }
 
@@ -431,6 +499,15 @@ function bind() {
     btn.addEventListener("click", () => socket.emit("create", { game: btn.dataset.quick, quick: true }));
   });
   $("#leave")?.addEventListener("click", () => socket.emit("leave"));
+  $("#tabTable")?.addEventListener("click", () => {
+    state.tab = "table";
+    render();
+  });
+  $("#tabHistory")?.addEventListener("click", () => {
+    state.tab = "history";
+    render();
+  });
+  $("#tlNext")?.addEventListener("click", () => socket.emit("tlNext"));
   $("#start")?.addEventListener("click", () => socket.emit("start"));
   $("#bots")?.addEventListener("click", () => socket.emit("fillBots"));
   document.querySelectorAll("[data-poker]").forEach((btn) => {
@@ -460,6 +537,10 @@ function bind() {
   document.querySelectorAll("[data-bj]").forEach((btn) => {
     btn.addEventListener("click", () => socket.emit("bj", { action: btn.dataset.bj }));
   });
+  document.querySelectorAll("[data-xet]").forEach((btn) => {
+    btn.addEventListener("click", () => socket.emit("bj", { action: "xet", targetId: btn.dataset.xet }));
+  });
+  $("#xetAll")?.addEventListener("click", () => socket.emit("bj", { action: "xetAll" }));
   $("#bjNext")?.addEventListener("click", () => socket.emit("bjNext"));
   document.querySelectorAll(".tl-hand .card[data-id]").forEach((el) => {
     el.addEventListener("click", () => {
