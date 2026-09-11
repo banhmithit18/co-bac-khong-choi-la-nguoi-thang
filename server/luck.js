@@ -181,3 +181,26 @@ export function tienlenDeal(playerCount, luckyIdx) {
   for (const hand of hands) hand.sort((a, b) => a.id.localeCompare(b.id));
   return hands;
 }
+
+export const BC_FACES = ["nai", "bau", "ga", "ca", "cua", "tom"];
+
+function randFace() {
+  return BC_FACES[Math.floor(Math.random() * BC_FACES.length)];
+}
+
+export function rollBauCua({ luckyIsCai, luckyBets, tableTotals }) {
+  const dice = [randFace(), randFace(), randFace()];
+  if (luckyIsCai && chance(0.22) && tableTotals) {
+    const heavy = Object.entries(tableTotals).sort((a, b) => b[1] - a[1])[0];
+    if (heavy && heavy[1] > 0) {
+      const i = dice.findIndex((f) => f === heavy[0]);
+      if (i >= 0) {
+        const others = BC_FACES.filter((f) => f !== heavy[0]);
+        dice[i] = others[Math.floor(Math.random() * others.length)];
+      }
+    }
+  } else if (!luckyIsCai && luckyBets?.length && chance(0.28)) {
+    dice[Math.floor(Math.random() * 3)] = luckyBets[Math.floor(Math.random() * luckyBets.length)];
+  }
+  return dice;
+}

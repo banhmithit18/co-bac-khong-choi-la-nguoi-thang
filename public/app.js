@@ -10,6 +10,7 @@ const state = {
   selected: [],
   toast: "",
   bet: 50000,
+  bcFace: "cua",
   tab: "table",
 };
 
@@ -117,7 +118,7 @@ function gate() {
   return `<div class="gate"><div class="gate-box">
     <div class="brand">Sòng Bài</div>
     <h1>Vào sòng.</h1>
-    <p>Poker, xì dách luật Việt và tiến lên miền Nam. Tạo phòng, gửi mã cho bạn, hoặc chơi ngay với máy.</p>
+    <p>Poker, xì dách luật Việt, tiến lên miền Nam và bầu cua. Tạo phòng, gửi mã cho bạn, hoặc chơi ngay với máy.</p>
     <div class="field">
       <label>Tên người chơi</label>
       <input id="name" maxlength="24" placeholder="Nhập tên" value="${escapeHtml(state.name)}" />
@@ -150,6 +151,7 @@ function home() {
       ${gameChoice("poker", "♠", "Poker", "Texas Hold’em. Mù nhỏ / mù lớn theo số tiền vào bàn.")}
       ${gameChoice("blackjack", "A♦", "Xì Dách", "Luật Việt: xì bàng, xì dách, ngũ linh. Dưới 16 phải rút.")}
       ${gameChoice("tienlen", "3♠", "Tiến Lên", "Luật miền Nam. 3♠ ra trước, chặt heo, đôi thông.")}
+      ${gameChoice("baucua", "🦀", "Bầu Cua", "Sáu cửa, ba viên. Trúng k lần ăn k:1. Nhà cái lắc đĩa.")}
     </div>
     <div class="panel">
       <h2>Vào phòng</h2>
@@ -213,6 +215,7 @@ function play() {
   if (state.tab === "history") return historyView(g);
   if (g.kind === "poker") return pokerView(g);
   if (g.kind === "blackjack") return bjView(g);
+  if (g.kind === "baucua") return bcView(g);
   return tlView(g);
 }
 
@@ -252,7 +255,7 @@ function historyView(g) {
 }
 
 function label(game) {
-  return { poker: "Poker", blackjack: "Xì Dách", tienlen: "Tiến Lên" }[game] || game;
+  return { poker: "Poker", blackjack: "Xì Dách", tienlen: "Tiến Lên", baucua: "Bầu Cua" }[game] || game;
 }
 
 function phaseName(phase) {
@@ -288,7 +291,7 @@ function pokerView(g) {
       ${
         you
           ? `<div class="you-row ${yourTurn ? "turn" : ""}">
-              <div class="name muted">${p.isCai ? "Nhà cái · " : ""}${escapeHtml(you.name)} · ${vnd(you.chips)}${you.bet ? ` · đã tố ${vnd(you.bet)}` : ""}</div>
+              <div class="name muted">${you.isCai ? "Nhà cái · " : ""}${escapeHtml(you.name)} · ${vnd(you.chips)}${you.bet ? ` · đã tố ${vnd(you.bet)}` : ""}</div>
               <div class="hand">${you.hole.map((c) => cardEl(c)).join("")}</div>
             </div>`
           : ""
@@ -405,6 +408,97 @@ function bjView(g) {
         : ""
     }
     ${g.phase === "result" ? `<div class="actions"><button class="primary" id="bjNext">Ván sau</button></div>` : ""}
+  </div>`;
+}
+
+function bcView(g) {
+  const you = g.players.find((p) => p.you);
+  const youAreCai = g.youAreCai || you?.isCai;
+  const cons = g.players.filter((p) => !p.isCai);
+  const cai = g.players.find((p) => p.isCai);
+  const minBet = g.minBet || 10000;
+  const betVal = Math.min(Math.max(state.bet, minBet), you && !youAreCai ? you.chips || minBet : minBet);
+  const animals = g.animals || [];
+  const face = animals.some((a) => a.id === state.bcFace) ? state.bcFace : animals[0]?.id;
+  const tableBets = g.tableBets || {};
+  const yourBets = you?.bets || {};
+  const dice = g.dice || [];
+  const hasBets = cons.some((p) => Object.values(p.bets || {}).some((n) => n > 0));
+  return `<div class="wrap">
+    ${topBar(`<button class="ghost" id="leave">Rời bàn</button>`)}
+    ${tabs()}
+    <div class="status">${escapeHtml(g.message || phaseName(g.phase))}</div>
+    <div class="felt"><div class="felt-in">
+      <div class="center">
+        <div class="pot">Nhà cái · ${escapeHtml(cai?.name || "")}${cai?.chips != null ? ` · ${vnd(cai.chips)}` : ""}${g.phase === "result" && cai?.lastDelta ? ` · ${cai.lastDelta > 0 ? "+" : ""}${vnd(cai.lastDelta)}` : ""}</div>
+        <div class="bc-bowl ${g.phase === "result" ? "open" : ""}">
+          ${
+            g.phase === "result" && dice.length
+              ? dice
+                  .map((id) => {
+                    const a = animals.find((x) => x.id === id);
+                    return `<div class="bc-die">${a?.emoji || ""}<small>${escapeHtml(a?.name || id)}</small></div>`;
+                  })
+                  .join("")
+              : `<div class="bc-lid">🍲<span>Úp đĩa</span></div>`
+          }
+        </div>
+      </div>
+      <div class="bc-board">
+        ${animals
+          .map((a) => {
+            const hit = dice.filter((d) => d === a.id).length;
+            return `<button type="button" class="bc-cell ${face === a.id ? "picked" : ""} ${yourBets[a.id] ? "yours" : ""} ${hit ? "hit" : ""}" data-bc-face="${a.id}">
+              <div class="bc-emoji">${a.emoji}</div>
+              <b>${escapeHtml(a.name)}</b>
+              <small>${tableBets[a.id] ? vnd(tableBets[a.id]) : "—"}</small>
+              ${yourBets[a.id] ? `<div class="muted">bạn ${vnd(yourBets[a.id])}</div>` : ""}
+              ${hit ? `<div class="bc-hit">×${hit}</div>` : ""}
+            </button>`;
+          })
+          .join("")}
+      </div>
+      <div class="opponents">
+        ${cons
+          .map((p) => {
+            const placed = animals.filter((a) => p.bets?.[a.id]).map((a) => `${a.emoji} ${vnd(p.bets[a.id])}`);
+            return `<div class="opp ${p.you ? "turn" : ""}">
+              <div class="name">${escapeHtml(p.name)} · ${vnd(p.chips)}</div>
+              <div class="muted">${placed.join(" · ") || (g.phase === "betting" ? "chưa đặt" : "—")}</div>
+              ${p.lastDelta ? `<div class="${p.lastDelta > 0 ? "hist-line win" : "hist-line lose"}">${p.lastDelta > 0 ? "+" : ""}${vnd(p.lastDelta)}</div>` : ""}
+            </div>`;
+          })
+          .join("")}
+      </div>
+    </div></div>
+    ${
+      g.phase === "betting" && you && !youAreCai
+        ? `<div class="panel">
+            <h2>Đặt cửa ${escapeHtml(animals.find((a) => a.id === face)?.name || "")}</h2>
+            <p class="muted">Tối thiểu ${vnd(minBet)}. Trúng 1 lần ăn 1:1, 2 lần 2:1, 3 lần 3:1 (trả gốc + tiền thắng).</p>
+            <div class="money-field">
+              <input id="bet" inputmode="numeric" value="${betVal.toLocaleString("vi-VN")}" />
+              <span>₫</span>
+            </div>
+            <div class="presets">
+              ${[minBet, minBet * 5, minBet * 10, minBet * 50]
+                .filter((n) => n <= you.chips)
+                .map((n) => `<button type="button" data-bet="${n}">${vnd(n)}</button>`)
+                .join("")}
+            </div>
+            <div class="actions" style="justify-content:flex-start"><button class="primary" id="bcBet">Cược</button></div>
+          </div>`
+        : ""
+    }
+    ${
+      g.phase === "betting" && youAreCai
+        ? `<div class="actions">
+            <button class="primary" id="bcShake" ${hasBets ? "" : "disabled"}>Lắc đĩa</button>
+          </div>
+          <p class="muted" style="text-align:center">Bạn là nhà cái. Đợi nhà con đặt cửa rồi lắc.</p>`
+        : ""
+    }
+    ${g.phase === "result" ? `<div class="actions"><button class="primary" id="bcNext">Ván sau</button></div>` : ""}
   </div>`;
 }
 
@@ -542,6 +636,21 @@ function bind() {
   });
   $("#xetAll")?.addEventListener("click", () => socket.emit("bj", { action: "xetAll" }));
   $("#bjNext")?.addEventListener("click", () => socket.emit("bjNext"));
+  document.querySelectorAll("[data-bc-face]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const typed = $("#bet")?.value;
+      if (typed) state.bet = parseMoneyInput(typed) || state.bet;
+      state.bcFace = btn.dataset.bcFace;
+      render();
+    });
+  });
+  $("#bcBet")?.addEventListener("click", () => {
+    const amount = parseMoneyInput($("#bet")?.value || state.bet);
+    state.bet = amount;
+    socket.emit("bcBet", { face: state.bcFace, amount });
+  });
+  $("#bcShake")?.addEventListener("click", () => socket.emit("bcShake"));
+  $("#bcNext")?.addEventListener("click", () => socket.emit("bcNext"));
   document.querySelectorAll(".tl-hand .card[data-id]").forEach((el) => {
     el.addEventListener("click", () => {
       const id = el.dataset.id;

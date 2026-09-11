@@ -6,6 +6,7 @@ import { fileURLToPath } from "url";
 import { createPoker, startPokerHand, pokerAction, pokerBotAction, publicPoker } from "./poker.js";
 import { createBlackjack, bjBet, bjAction, bjNext, bjBotTick, publicBlackjack } from "./blackjack.js";
 import { createTienlen, tlPlay, tlPass, tlBotAction, nextTienlen, publicTienlen } from "./tienlen.js";
+import { createBauCua, bcBet, bcShake, bcNext, bcBotTick, publicBauCua } from "./baucua.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -31,8 +32,8 @@ function parseMoney(raw, fallback = DEFAULT_CHIPS) {
   return Math.min(MAX_CHIPS, Math.max(MIN_CHIPS, Math.round(n)));
 }
 
-const CAP = { poker: 6, blackjack: 5, tienlen: 4 };
-const FILL = { poker: 4, blackjack: 4, tienlen: 4 };
+const CAP = { poker: 6, blackjack: 5, tienlen: 4, baucua: 8 };
+const FILL = { poker: 4, blackjack: 4, tienlen: 4, baucua: 4 };
 
 function code() {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -74,6 +75,7 @@ function viewFor(room, viewerId) {
   if (room.game === "poker") return publicPoker(room.state, viewerId);
   if (room.game === "blackjack") return publicBlackjack(room.state, viewerId);
   if (room.game === "tienlen") return publicTienlen(room.state, viewerId);
+  if (room.game === "baucua") return publicBauCua(room.state, viewerId);
   return null;
 }
 
@@ -169,6 +171,22 @@ function runBots(room) {
     emitRoom(room);
     const next = g.turn >= 0 ? g.players[g.turn] : null;
     if (next?.isBot) queueBots(room);
+    return;
+  }
+  if (room.game === "baucua") {
+    const g = room.state;
+    if (g.phase === "result") {
+      emitRoom(room);
+      return;
+    }
+    const did = bcBotTick(g);
+    emitRoom(room);
+    if (!did) return;
+    if (g.phase === "result") return;
+    const waitingBot = g.players.some(
+      (p) => !p.isCai && p.isBot && Object.values(p.bets).every((n) => n <= 0) && p.chips >= g.minBet
+    );
+    if (waitingBot) queueBots(room);
   }
 }
 
@@ -338,6 +356,36 @@ io.on("connection", (socket) => {
     queueBots(room);
   });
 
+  socket.on("bcBet", ({ face, amount }) => {
+    const room = rooms.get(socket.data.room);
+    if (!room?.state || room.game !== "baucua") return;
+    const res = bcBet(room.state, socket.id, face, amount);
+    if (!res.ok) return socket.emit("errorMsg", res.error);
+    emitRoom(room);
+    queueBots(room);
+  });
+
+  socket.on("bcShake", () => {
+    const room = rooms.get(socket.data.room);
+    if (!room?.state || room.game !== "baucua") return;
+    const res = bcShake(room.state, socket.id);
+    if (!res.ok) return socket.emit("errorMsg", res.error);
+    emitRoom(room);
+  });
+
+  socket.on("bcNext", () => {
+    const room = rooms.get(socket.data.room);
+    if (!room?.state || room.game !== "baucua") return;
+    if (room.state.phase !== "result") return;
+    for (const p of room.players) {
+      const g = room.state.players.find((x) => x.id === p.id);
+      if (g) p.chips = g.chips;
+    }
+    bcNext(room.state);
+    emitRoom(room);
+    queueBots(room);
+  });
+
   socket.on("leave", () => {
     leaveSocket(socket);
     socket.emit("left");
@@ -353,6 +401,8 @@ function startRoom(room) {
     startPokerHand(room.state);
   } else if (room.game === "blackjack") {
     room.state = createBlackjack(room.players, room.host);
+  } else if (room.game === "baucua") {
+    room.state = createBauCua(room.players, room.host);
   } else {
     room.state = createTienlen(room.players, room.host);
   }
