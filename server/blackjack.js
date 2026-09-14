@@ -188,9 +188,8 @@ export function bjAction(game, playerId, action, targetId) {
     p.cards.push(bjDraw(game.shoe, p.cards, isLucky(p.name)));
     const r = rankHand(p.cards);
     if (r.tier === 0) {
+      // Quắc: stop drawing, keep hand face-down until nhà cái "Xét cửa này"
       p.stood = true;
-      p.revealed = true;
-      applyPayout(game, p, "lose", r);
     } else if (r.tier === 3 || r.total >= 21 || p.cards.length >= 5) {
       p.stood = true;
     }

@@ -106,35 +106,42 @@ function cardEl(card, extra = "") {
 
 function topBar(right = "") {
   const room = state.room ? `Phòng <span class="code">${state.room.code}</span>` : "";
-  return `<div class="top">
+  return `<header class="top">
     <div class="brand">Sòng Bài</div>
-    <div class="wallet"><span class="coin"></span>${vnd(state.chips)}</div>
-    <div class="muted">${escapeHtml(state.name)} ${room}</div>
+    <div class="wallet"><span class="coin" aria-hidden="true"></span>${vnd(state.chips)}</div>
+    <div class="muted">${escapeHtml(state.name)}${room ? ` · ${room}` : ""}</div>
     <div>${right}</div>
-  </div>`;
+  </header>`;
 }
 
 function gate() {
-  return `<div class="gate"><div class="gate-box">
-    <div class="brand">Sòng Bài</div>
-    <h1>Vào sòng.</h1>
-    <p>Poker, xì dách luật Việt, tiến lên miền Nam và bầu cua. Tạo phòng, gửi mã cho bạn, hoặc chơi ngay với máy.</p>
-    <div class="field">
-      <label>Tên người chơi</label>
-      <input id="name" maxlength="24" placeholder="Nhập tên" value="${escapeHtml(state.name)}" />
+  return `<div class="gate">
+    <div class="gate-hero">
+      <div class="gate-kicker">Bàn Việt · online</div>
+      <div class="brand">Sòng Bài</div>
+      <h1>Vào sòng.</h1>
+      <p class="lede">Poker, xì dách luật Việt, tiến lên miền Nam và bầu cua. Tạo phòng, gửi mã, hoặc chơi ngay với máy.</p>
     </div>
-    <div class="field">
-      <label>Số tiền vào bàn</label>
-      <div class="money-field">
-        <input id="money" inputmode="numeric" placeholder="1.000.000" value="${escapeHtml(formatInput(state.money))}" />
-        <span>₫</span>
+    <div class="gate-box">
+      <h1>Đăng nhập bàn</h1>
+      <p>Chọn tên và số tiền mang vào. Nhà cái là người tạo phòng.</p>
+      <div class="field">
+        <label for="name">Tên người chơi</label>
+        <input id="name" maxlength="24" placeholder="Nhập tên" value="${escapeHtml(state.name)}" autocomplete="nickname" />
       </div>
-      <div class="presets">
-        ${PRESETS.map((n) => `<button type="button" data-preset="${n}">${vnd(n)}</button>`).join("")}
+      <div class="field">
+        <label for="money">Số tiền vào bàn</label>
+        <div class="money-field">
+          <input id="money" inputmode="numeric" placeholder="1.000.000" value="${escapeHtml(formatInput(state.money))}" />
+          <span>₫</span>
+        </div>
+        <div class="presets">
+          ${PRESETS.map((n) => `<button type="button" data-preset="${n}">${vnd(n)}</button>`).join("")}
+        </div>
       </div>
+      <button class="primary" id="enter" style="width:100%">Vào sòng</button>
     </div>
-    <button class="primary" id="enter" style="width:100%">Vào sòng</button>
-  </div></div>`;
+  </div>`;
 }
 
 function formatInput(n) {
@@ -145,18 +152,23 @@ function formatInput(n) {
 function home() {
   return `<div class="wrap">
     ${topBar(`<button class="ghost" id="rename">Đổi tên / tiền</button>`)}
-    <h1>Chọn bàn.</h1>
-    <p class="muted">Chơi online cùng phòng, một bộ bài.</p>
+    <div class="home-head">
+      <div>
+        <h1>Chọn bàn.</h1>
+        <p class="lede">Chơi online cùng phòng. Một sòng, bốn trò.</p>
+      </div>
+      <p class="muted">Người tạo phòng là nhà cái. Gửi mã 4 ký tự cho bạn bè, hoặc chơi ngay với máy.</p>
+    </div>
     <div class="games">
       ${gameChoice("poker", "♠", "Poker", "Texas Hold’em. Mù nhỏ / mù lớn theo số tiền vào bàn.")}
       ${gameChoice("blackjack", "A♦", "Xì Dách", "Luật Việt: xì bàng, xì dách, ngũ linh. Dưới 16 phải rút.")}
       ${gameChoice("tienlen", "3♠", "Tiến Lên", "Luật miền Nam. 3♠ ra trước, chặt heo, đôi thông.")}
       ${gameChoice("baucua", "🦀", "Bầu Cua", "Sáu cửa, ba viên. Trúng k lần ăn k:1. Nhà cái lắc đĩa.")}
     </div>
-    <div class="panel">
+    <div class="panel join-panel">
       <h2>Vào phòng</h2>
       <div class="row">
-        <input id="code" maxlength="6" placeholder="Mã phòng" />
+        <input id="code" maxlength="6" placeholder="Mã phòng" autocomplete="off" spellcheck="false" />
         <button id="join">Vào</button>
       </div>
     </div>
